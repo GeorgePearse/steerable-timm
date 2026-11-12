@@ -31,7 +31,7 @@ class CommandLog:
     def db(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         db = sqlite3.connect(self.path, isolation_level=None, timeout=30, check_same_thread=False)
-        for attempt in range(50):
+        for _ in range(50):
             try:
                 db.execute("PRAGMA journal_mode=WAL")
                 db.execute("PRAGMA synchronous=NORMAL")
@@ -59,7 +59,7 @@ class CommandLog:
 
     def command(self, command_id: int) -> dict[str, Any]:
         cur = self.db.execute("SELECT id, status, step, error FROM commands WHERE id=?", (command_id,))
-        return dict(zip(("id", "status", "step", "error"), cur.fetchone()))
+        return dict(zip(("id", "status", "step", "error"), cur.fetchone(), strict=True))
 
     def wait(self, command_id: int, timeout: float = 60.0) -> dict[str, Any]:
         end = time.time() + timeout

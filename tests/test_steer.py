@@ -93,7 +93,9 @@ def test_optimizer_in_place_and_lr_groups(rig):
     assert all(g["betas"] == (0.8, 0.9) for g in live.optimizer.param_groups)
     log.set({"optimizer.lr_mult": {"fc": 10.0}})
     state = steer.sync(2)
-    lrs = {g["lr_scale"]: lr for g, lr in zip(live.optimizer.param_groups, set_lr(live, state, 2))}
+    lrs = {
+        g["lr_scale"]: lr for g, lr in zip(live.optimizer.param_groups, set_lr(live, state, 2), strict=True)
+    }
     assert lrs == {1.0: 2e-3, 10.0: 2e-2}
     fc = [g for g in live.optimizer.param_groups if g["lr_scale"] == 10.0]
     assert sum(len(g["params"]) for g in fc) == 2
