@@ -80,11 +80,14 @@ def main(path: str) -> None:
     axes[2].set_yscale("log")
     axes[3].set_ylim(-0.05, 1.05)
     axes[3].set_xlabel("training step")
-    top = axes[0]
+    top, row, last = axes[0], 0, -(10**9)
+    top.set_title(panels[0][0], loc="left", fontsize=9.5, color=INK, pad=54)
     for i, step in enumerate(marks, 1):
+        row = (row + 1) % 3 if step - last < 700 else 0
+        last = step
         top.annotate(
-            str(i), (step, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 14), textcoords="offset points",
-            ha="center", va="bottom", fontsize=8, color=INK, bbox={"boxstyle": "circle,pad=0.25", "fc": SURFACE, "ec": MUTED, "lw": 0.7},
+            str(i), (step, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 6 + 15 * row), textcoords="offset points",
+            ha="center", va="bottom", fontsize=7.5, color=INK,
         )  # fmt: skip
     lines = []
     for i, step in enumerate(marks, 1):
@@ -92,7 +95,7 @@ def main(path: str) -> None:
             ", ".join(f"{k} {json.dumps(a)} → {json.dumps(b)}" for k, (a, b) in r["diff"].items())
             for r in applied[step]
         )
-        lines.append(f"{i}. step {step}: {what if len(what) < 150 else what[:147] + '…'}")
+        lines.append(f"{i}. step {step}: {what if len(what) < 128 else what[:125] + '…'}")
     if rejected:
         lines.append(f"dotted: rejected commands at steps {', '.join(map(str, rejected))}")
     fig.suptitle(
@@ -102,7 +105,7 @@ def main(path: str) -> None:
     fig.text(
         0.06, 0.005, "\n".join(lines), fontsize=7.6, color=MUTED, va="bottom", ha="left", family="monospace"
     )
-    fig.subplots_adjust(left=0.06, right=0.98, top=0.92, bottom=0.07 + 0.0135 * len(lines), hspace=0.32)
+    fig.subplots_adjust(left=0.06, right=0.98, top=0.885, bottom=0.07 + 0.0135 * len(lines), hspace=0.32)
     fig.savefig(out / "plot.png", dpi=150, facecolor=SURFACE)
 
 
