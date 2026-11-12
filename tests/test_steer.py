@@ -212,6 +212,14 @@ def test_loader_swap_mix_and_queue(rig):
     steer.sync(50)
     feeder.pending[2].join()
     assert [feeder.next(s)[0] for s in range(50, 58)] == ["train"] * 5 + ["hard"] * 3
+    live.notes.clear()
+    log.set({"data.randaug": 5})
+    steer.sync(60)
+    feeder.pending[2].join()
+    feeder.next(60)
+    assert live.notes == [
+        "loaders switched at step 60: batch_size=4 resolution=48 randaug=5 workers=0 sources=['hard', 'train']"
+    ]
 
 
 def test_mixup_and_drop_path(rig):

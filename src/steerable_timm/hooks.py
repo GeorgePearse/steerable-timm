@@ -276,10 +276,9 @@ class Feeder:
             return
         if self.cfg is None or cfg.queue != self.cfg.queue:
             self.origin = step
-        if self.cfg is not None and box.keys() - self.iters.keys():
-            self.live.notes.append(
-                f"loaders switched: batch_size={cfg.batch_size} resolution={cfg.resolution}"
-            )
+        if self.cfg is not None and any(box[n] is not self.iters.get(n) for n in box):
+            fields = " ".join(f"{f}={getattr(cfg, f)}" for f in LOADER_FIELDS)
+            self.live.notes.append(f"loaders switched at step {step}: {fields} sources={sorted(box)}")
         self.cfg, self.iters = cfg, box
 
     def mix(self, step: int) -> dict[str, float]:
