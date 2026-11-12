@@ -142,7 +142,7 @@ def parse_assignments(pairs: list[str]) -> dict[str, Any]:
 
 
 def flatten(doc: Any, prefix: str = "") -> dict[str, Any]:
-    if not isinstance(doc, dict) or (not doc and prefix):
+    if not isinstance(doc, dict):
         return {prefix: doc}
     out: dict[str, Any] = {}
     for k, v in doc.items():

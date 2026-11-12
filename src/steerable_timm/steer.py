@@ -47,7 +47,7 @@ class Hooks:
 
 class Steer:
     def __init__(
-        self, log: CommandLog, live: Any, state: State, hooks: Hooks, step: int = 0, flush_every: int = 50
+        self, log: CommandLog, live: Any, state: State, hooks: Hooks, step: int = 0, flush_every: int = 10
     ):
         fabric = getattr(live, "fabric", None)
         self.log, self.live, self.state, self.hooks = log, live, state, hooks
