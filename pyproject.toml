@@ -1,0 +1,32 @@
+[project]
+name = "steerable-timm"
+version = "0.1.0"
+description = "The hook structure that lets an LLM steer a timm training run while it trains"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "George Pearse" }]
+dependencies = ["torch>=2.2", "timm>=1.0", "lightning>=2.2", "pydantic>=2.6"]
+
+[project.scripts]
+steer = "steerable_timm.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/GeorgePearse/steerable-timm"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steerable_timm"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
