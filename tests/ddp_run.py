@@ -14,6 +14,7 @@ from steerable_timm import CommandLog, Live, State, Steer, apply_patch, builtin,
 COMMANDS = {
     2: {"freeze.frozen": ["layer1", "layer2", "layer3", "layer4"], "optimizer.lr": 2e-3},
     5: {"freeze.frozen": ["layer1"], "optimizer.lr_mult": {"fc": 5.0}},
+    6: {"flow.skip": {"layer1.0.act1": 0.2}, "flow.drop_path": {"layer1.0.bn2": 0.1}, "flow.fade_steps": 6},
     8: {"data.batch_size": 4, "data.mix": {"train": 1, "hard": 1}},
     11: {"optimizer.name": "sgd", "optimizer.lr": 0.01},
     14: {"freeze.frozen": [], "data.batch_size": 9999},
@@ -40,7 +41,18 @@ def main(run_dir: Path) -> None:
         live.stepper.step()
         live.optimizer.zero_grad()
         trainable = sum(p.requires_grad for p in live.module.parameters())
-        trace.append([step, state.version, lrs, source, len(x), trainable, type(live.optimizer).__name__])
+        trace.append(
+            [
+                step,
+                state.version,
+                lrs,
+                source,
+                len(x),
+                trainable,
+                type(live.optimizer).__name__,
+                len(live.taps),
+            ]
+        )
         if writer and step in COMMANDS:
             writer.set(COMMANDS[step], author="test", check=False)
     checksum = [float(p.double().sum()) for p in live.module.parameters()]

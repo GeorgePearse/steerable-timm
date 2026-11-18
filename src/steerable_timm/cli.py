@@ -52,10 +52,20 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("data", parents=[common], help="data mix a=1 b=3 | data queue hard:200 train:500")
     d.add_argument("what", choices=["mix", "queue"])
     d.add_argument("items", nargs="*")
+    f = sub.add_parser("flow", parents=[common], help="flow skip layer1.0=0.5 --fade 2000 | flow clear")
+    f.add_argument("what", choices=["skip", "scale", "drop_path", "dropout", "clear"])
+    f.add_argument("items", nargs="*", help="module-name pattern=value; replaces that kind's taps")
+    f.add_argument("--fade", type=int, help="steps for every flow value to return to neutral; 0 = hold")
     sub.add_parser("run", parents=[common], help="run control").add_argument(
         "action", choices=["pause", "resume", "stop", "eval", "checkpoint"]
     )
     sub.add_parser("log", help="applied and rejected changes").add_argument("--last", type=int, default=20)
+    g = sub.add_parser("grads", help="gradient norm per parameter group, one row per metrics row")
+    g.add_argument("--last", type=int, default=10)
+    mo = sub.add_parser(
+        "modules", help="module names a flow tap can target (skip = input and output shapes match)"
+    )
+    mo.add_argument("pattern", nargs="?", default="*")
     m = sub.add_parser("metrics", help="compact metrics and eval rows")
     m.add_argument("--last", type=int, default=200)
     m.add_argument("--every", type=int, default=1, help="print every k-th metrics row")
@@ -85,6 +95,35 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "data":
         stages = [{"mix": {n: 1.0}, "steps": int(s)} for n, s in (i.rsplit(":", 1) for i in args.items)]
         return _send(log, args, {"data.queue": stages})
+    elif args.cmd == "flow":
+        kinds = ("skip", "scale", "drop_path", "dropout")
+        patch: dict[str, Any] = (
+            {f"flow.{k}": {} for k in kinds}
+            if args.what == "clear"
+            else {f"flow.{args.what}": parse_assignments(args.items), "flow.origin": None}
+        )
+        if args.fade is not None:
+            patch["flow.fade_steps"] = args.fade
+        return _send(log, args, patch)
+    elif args.cmd == "grads":
+        rows = [r for r in log.metrics(args.last * 20) if r.get("grad_flow")][-args.last :]
+        groups = list(dict.fromkeys(k for r in rows for k in r["grad_flow"]))
+        print("step " + " ".join(groups))
+        for r in rows:
+            print(f"{r['step']} " + " ".join(_fmt(r["grad_flow"].get(k)) for k in groups))
+    elif args.cmd == "modules":
+        from .flow import module_matches
+
+        found = log.events("modules", 1)
+        if not found:
+            print("the trainer has not recorded its modules (see modules() in the README)", file=sys.stderr)
+            return 2
+        print("name type params tap skip")
+        for r in found[-1]["rows"]:
+            if module_matches(r["name"], args.pattern):
+                print(
+                    f"{r['name']} {r['type']} {r['params']} {'yes' if r['tap'] else 'no'} {'yes' if r['skip'] else 'no'}"
+                )
     elif args.cmd == "run":
         run = state.get("run", {})
         patch = {

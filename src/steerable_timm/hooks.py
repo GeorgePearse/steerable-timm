@@ -16,6 +16,7 @@ from timm.scheduler import create_scheduler_v2
 from torch.nn.modules.batchnorm import _BatchNorm
 from torch.utils.data import DataLoader, Dataset
 
+from .flow import apply_flow, check_flow, tick
 from .state import Data, Optimizer, State, matches
 from .steer import Hooks
 
@@ -40,6 +41,12 @@ class Live:
     mixup: Mixup | None = None
     requests: set[str] = field(default_factory=set)
     notes: list[str] = field(default_factory=list)
+    example_input: torch.Tensor | None = None
+    step: int = 0
+    taps: list[Any] = field(default_factory=list)
+    shapes: dict[str, Any] | None = None
+    flow_origin: int = 0
+    flow_faded: bool = False
 
 
 builtin = Hooks()
@@ -56,6 +63,7 @@ def _check(live: Live, state: State) -> None:
         raise ValueError("freeze.frozen: at least one parameter must stay trainable")
     if state.data.drop_path and not any(isinstance(m, DropPath) for m in live.module.modules()):
         raise ValueError("data.drop_path: model has no DropPath modules (create it with drop_path_rate > 0)")
+    check_flow(live, state)
 
 
 def is_frozen(name: str, state: State) -> bool:
@@ -160,7 +168,9 @@ def schedule(live: Live, old: State | None, new: State, step: int) -> None:
 
 
 def set_lr(live: Live, state: State, step: int) -> list[float]:
-    """Call every step: lr = optimizer.lr * group multiplier * schedule factor. Returns the lr per group."""
+    """Call every step: lr = optimizer.lr * group multiplier * schedule factor. Returns the lr per group.
+    Also advances the fade clock of the flow taps."""
+    tick(live, state, step)
     factor = 1.0
     if live.schedule is not None:
         live.schedule.step(max(0, step - live.schedule_origin))
@@ -185,6 +195,11 @@ def drop_path(live: Live, old: State | None, new: State, step: int) -> None:
     mods = [m for m in live.module.modules() if isinstance(m, DropPath)]
     for i, m in enumerate(mods):
         m.drop_prob = new.data.drop_path * (i + 1) / len(mods)
+
+
+@builtin.on_change("flow")
+def flow(live: Live, old: State | None, new: State, step: int) -> None:
+    apply_flow(live, new, step)
 
 
 @builtin.on_change("data.mix", "data.queue", *(f"data.{f}" for f in LOADER_FIELDS))

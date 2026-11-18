@@ -2,7 +2,7 @@
 
 The hook structure that lets an LLM steer a [timm](https://github.com/huggingface/pytorch-image-models) training run while it trains.
 
-- The run has one typed, versioned `State` document: optimizer, schedule, freezing, data, run control.
+- The run has one typed, versioned `State` document: optimizer, schedule, freezing, data, gradient flow, run control.
 - Anyone changes it by appending a JSON patch to a SQLite file in the run directory. Writers never talk to the trainer.
 - The loop calls `steer.sync(step)` once per step. It reads one integer; if patches are pending it validates them, applies them as one change, and calls the hooks registered for the paths that changed.
 - Hooks turn the change into an action on the live objects: edit the optimizer, rebuild param groups, swap a DataLoader, pause.
@@ -30,6 +30,9 @@ uv run steer set optimizer.name=sgd optimizer.lr=0.02
 uv run steer data mix train=0.7 hard=0.3
 uv run steer data queue hard:200                       # source "hard" for 200 steps, then back to the mix
 uv run steer set data.randaug=9 data.mixup=0.2 data.batch_size=256
+uv run steer grads                                     # gradient norm per parameter group, per metrics row
+uv run steer modules 'layer3.*'                        # module names a flow tap can target
+uv run steer flow skip 'layer3.?=0.5' --fade 2000      # temporary skip connection around each layer3 block
 uv run steer run eval                                  # also: pause, resume, checkpoint, stop
 uv run steer log --last 20                             # what was applied or rejected, at which step, and why
 ```
@@ -90,6 +93,7 @@ A data source is a function from the `data` section of the State to a `Dataset`,
 | `data.batch_size`, `resolution`, `randaug`, `workers`, a new source | new DataLoaders built in a background thread, first batch prefetched | switched at a step boundary once ready |
 | `data.mixup`, `data.cutmix` | new `timm.data.Mixup` | next batch |
 | `data.drop_path` | sets `drop_prob` on the model's `DropPath` modules, scaled linearly with depth | next batch |
+| `flow.*` | removes every tap, then registers forward hooks on the named modules; nothing is added to the model's parameters | next batch |
 | `data.label_smoothing`, `data.accumulation`, `optimizer.grad_clip` | no hook: the loop reads them from State | next batch |
 | `run.pause`, `run.stop` | `sync` holds at the step boundary until unpaused; the loop breaks on stop | at the step it is applied |
 | `run.eval_now`, `checkpoint_now`, `eval_every`, `checkpoint_every` | `due(live, state, step)` tells the loop what to do after this step | after the step |
@@ -107,6 +111,50 @@ Patterns match parameter names. `layer4` and `blocks.[0-5]` cover everything und
 Under DDP, rank 0 reads the log and broadcasts the new State, so every rank applies the same version at the same step. The source drawn for each step is seeded by the step, and a loader switch waits until every rank has built its loaders.
 
 Patches are validated in order against the schema and the checks (unknown optimizer, unknown data source, nothing left trainable). Invalid ones are rejected individually with the reason; the valid ones are coalesced into one new version and one pass over the hooks. If a hook raises, the previous State is re-applied and the batch is recorded as rejected.
+
+### Gradient flow
+
+`flow` is for repairing a run that has stopped learning without changing the architecture. Each entry puts a tap on a named module `f`:
+
+```
+y = drop(scale * f(x)) + skip * x
+```
+
+| Path | Effect on the tapped module | Typical use |
+|---|---|---|
+| `flow.skip` | adds `alpha * input` to the output (input and output shapes must match) | a gradient path around a block; on a ReLU it lets negative inputs through |
+| `flow.scale` | multiplies the output | damp a residual branch that is blowing up |
+| `flow.drop_path` | zeroes the output for a random share of samples, rescaling the rest (training only) | stochastic depth on a branch, including models built without `DropPath` |
+| `flow.dropout` | zeroes a random share of elements (training only) | regularise one layer |
+| `flow.fade_steps` | every value moves linearly to neutral (skip 0, scale 1, drops 0) over this many steps | make the fix temporary without a jump in the loss |
+
+```sh
+steer grads --last 5                           # where does the gradient stop?
+steer modules 'layer3.*'                       # name, type, params, tap, skip
+steer flow skip 'layer3.?=0.5' --fade 2000     # a skip around each layer3 block, gone after 2,000 steps
+steer flow scale 'layer4.0.bn2=0.3'            # replaces the scale taps only
+steer flow clear
+```
+
+- Taps are forward hooks. The model's parameters and `state_dict` do not change, and removing a tap, or letting it fade out, restores the original function exactly. A test checks this.
+- Module patterns name modules exactly: `layer3` is the stage, `layer3.?` its blocks, `re:blocks\.\d+` every block. Parameter patterns elsewhere also cover children; these do not.
+- `drop_path` zeroes the whole output, so use it on a residual branch (the last layer before the add), not on a layer the signal has to pass through.
+- A patch is rejected if a pattern matches no module, if a `skip` target changes the shape of its input, or if a target does not take and return one tensor. Shapes come from one forward of two random images in eval mode, run once.
+- `set_lr` advances the fade clock, so call it every step as the example does. When a fade finishes a `note` event is written; the taps stay registered as no-ops until `flow` changes.
+- `grad_flow(module, depth=1)` returns the gradient norm per parameter-name prefix. The example adds it to every metrics row as `grad_flow`, and records the module table once at start with `modules(live, state)` so that `steer modules` can list it.
+- For a model without a conv stem, pass `Live(example_input=...)` with a batch of two.
+
+What this is not: it adds no parameters, so there is no projection shortcut for blocks that change shape, and no new layers.
+
+A 30-layer stack of `Linear` + `Sigmoid` with no residual connections (`tests/test_flow.py`), gradient norm after one backward:
+
+| | stem | block 0 | block 14 | block 29 | head |
+|---|---|---|---|---|---|
+| as built | 0 | 0 | 1.9e-14 | 0.099 | 0.79 |
+| `flow.skip` 0.5 on every block | 1.2e-9 | 7.4e-10 | 1.2e-5 | 0.20 | 1.8 |
+| `flow.skip` 1.0 on every block | 0.42 | 0.21 | 1.9 | 3.3 | 76 |
+
+That shows the gradient reaches the bottom of the stack. Whether a run then trains better is not shown here.
 
 ### Writing a hook
 
@@ -165,6 +213,12 @@ Output of `steer schema`:
 | `data.label_smoothing` | `float` | ≥ 0 ≤ 0.5 | `0.0` |  |
 | `data.drop_path` | `float` | ≥ 0 ≤ 0.9 | `0.0` | max stochastic-depth rate |
 | `data.workers` | `int` | ≥ 0 ≤ 64 | `4` |  |
+| `flow.skip` | `dict[str, float]` | 0 to 2 | `{}` | module-name pattern -> alpha: output + alpha * input |
+| `flow.scale` | `dict[str, float]` | 0 to 4 | `{}` | module-name pattern -> factor on the module's output |
+| `flow.drop_path` | `dict[str, float]` | 0 to 0.9 | `{}` | module-name pattern -> per-sample drop rate of the output |
+| `flow.dropout` | `dict[str, float]` | 0 to 0.9 | `{}` | module-name pattern -> per-element drop rate of the output |
+| `flow.fade_steps` | `int` | ≥ 0 | `0` | steps for every value to return to neutral; 0 = hold |
+| `flow.origin` | `int \| None` | ≥ 0 | `None` | step where the fade starts; null = when applied |
 | `run.pause` | `bool` |  | `False` | hold at the next step boundary until false |
 | `run.stop` | `bool` |  | `False` | end the run at the next step boundary |
 | `run.eval_every` | `int` | ≥ 0 | `0` | steps between evals; 0 = never |
@@ -176,13 +230,13 @@ Output of `steer schema`:
 
 ## Tracking
 
-Everything is in `steer.db` in the run directory. `events.kind` is `metrics`, `eval`, `change`, `state`, `note`; `data` is JSON.
+Everything is in `steer.db` in the run directory. `events.kind` is `metrics`, `eval`, `change`, `state`, `note`, `modules`; `data` is JSON.
 
 ```sql
 SELECT step, kind, version, data FROM events WHERE kind IN ('metrics', 'eval', 'change') ORDER BY step, id;
 ```
 
-Metrics rows are buffered and written every 10 rows, and whenever a change is applied. A metrics row has loss, lr per param group, grad norm, frozen fraction, samples/s and the active data source. A change row has the command id, author, reason, patch, diff and applied/rejected with the error.
+Metrics rows are buffered and written every 10 rows, and whenever a change is applied. A metrics row has loss, lr per param group, grad norm, grad norm per top-level parameter group, frozen fraction, samples/s and the active data source. A change row has the command id, author, reason, patch, diff and applied/rejected with the error.
 
 ## Overhead
 
