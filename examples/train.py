@@ -28,6 +28,8 @@ from steerable_timm import (
     apply_patch,
     builtin,
     due,
+    grad_flow,
+    modules,
     parse_assignments,
     set_lr,
     train_mode,
@@ -74,9 +76,12 @@ def fit(
     if resume:
         live.optimizer.load_state_dict(ckpt["optimizer"])
     ctl = Steer(CommandLog(run_dir), live, state, hooks, step=start) if steer else None
+    if ctl:
+        ctl.metrics(start, kind="modules", rows=modules(live, state))
     losses: list[float] = []
     window: list[float] = []
     grad_norm, clock, samples = 0.0, time.perf_counter(), 0
+    flow: dict[str, float] = {}
 
     def save(step: int, name: str) -> None:
         doc = {
@@ -99,6 +104,8 @@ def fit(
         loss = F.cross_entropy(live.model(x), y, label_smoothing=state.data.label_smoothing)
         fabric.backward(loss / state.data.accumulation)
         if (step + 1) % state.data.accumulation == 0:
+            if (step + 1) % log_every == 0 or state.data.accumulation > 1:
+                flow = grad_flow(module)
             clip = state.optimizer.grad_clip or float("inf")
             grad_norm = float(
                 fabric.clip_gradients(live.model, live.stepper, max_norm=clip, error_if_nonfinite=False)
@@ -115,6 +122,7 @@ def fit(
                 "loss": sum(window) / len(window),
                 "lr": lrs,
                 "grad_norm": grad_norm,
+                "grad_flow": flow,
                 "frozen": sum(p.numel() for p in params if not p.requires_grad)
                 / sum(p.numel() for p in params),
                 "samples_per_s": samples / (time.perf_counter() - clock),
@@ -122,7 +130,11 @@ def fit(
             }
             print(
                 f"step {step + 1} "
-                + " ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}" for k, v in row.items())
+                + " ".join(
+                    f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in row.items()
+                    if k != "grad_flow"
+                )
             )
             if ctl:
                 ctl.metrics(step + 1, **row)

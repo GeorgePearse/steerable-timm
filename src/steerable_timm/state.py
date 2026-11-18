@@ -71,6 +71,23 @@ class Data(Section):
         return self
 
 
+class Flow(Section):
+    skip: Weights = Field({}, description="module-name pattern -> alpha: output + alpha * input")
+    scale: Weights = Field({}, description="module-name pattern -> factor on the module's output")
+    drop_path: Weights = Field({}, description="module-name pattern -> per-sample drop rate of the output")
+    dropout: Weights = Field({}, description="module-name pattern -> per-element drop rate of the output")
+    fade_steps: int = Field(0, ge=0, description="steps for every value to return to neutral; 0 = hold")
+    origin: int | None = Field(None, ge=0, description="step where the fade starts; null = when applied")
+
+    @model_validator(mode="after")
+    def _bounds(self) -> Flow:
+        for kind, top in (("skip", 2.0), ("scale", 4.0), ("drop_path", 0.9), ("dropout", 0.9)):
+            for pattern, value in getattr(self, kind).items():
+                if not 0 <= value <= top:
+                    raise ValueError(f"{kind}[{pattern!r}] must be in [0, {top:g}]")
+        return self
+
+
 class Run(Section):
     pause: bool = Field(False, description="hold at the next step boundary until false")
     stop: bool = Field(False, description="end the run at the next step boundary")
@@ -86,6 +103,7 @@ class State(Section):
     schedule: Schedule = Schedule()
     freeze: Freeze = Freeze()
     data: Data = Data()
+    flow: Flow = Flow()
     run: Run = Run()
     extra: dict[str, Any] = Field({}, description="free-form values for your own hooks")
 

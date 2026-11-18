@@ -14,12 +14,15 @@ __all__ = [
     "builtin",
     "diff",
     "due",
+    "grad_flow",
+    "modules",
     "parse_assignments",
     "schema",
     "set_lr",
     "train_mode",
 ]
 _LAZY = {"Feeder", "Live", "builtin", "due", "set_lr", "train_mode"}
+_FLOW = {"grad_flow", "modules"}
 
 
 def __getattr__(name: str):
@@ -27,4 +30,8 @@ def __getattr__(name: str):
         from . import hooks
 
         return getattr(hooks, name)
+    if name in _FLOW:
+        from . import flow
+
+        return getattr(flow, name)
     raise AttributeError(name)
